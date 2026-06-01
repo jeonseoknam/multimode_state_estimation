@@ -10,7 +10,7 @@ public:
   {
     // Subscriber: /odom
     sub_odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
-      "/odom", 1,
+      "/morai/ground_truth/odom", 1,
       std::bind(&OdomToTwistConverter::odomCallback, this, std::placeholders::_1));
 
     // Publisher: /vehicle/twist_with_covariance

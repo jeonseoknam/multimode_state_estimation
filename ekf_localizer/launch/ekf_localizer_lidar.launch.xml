@@ -1,0 +1,39 @@
+<launch>
+  <arg name="param_file" default="$(find-pkg-share ekf_localizer)/config/ekf_localizer_lidar.param.yaml"/>
+  <arg name="ekf_mode" default="lidar"/>
+  <arg name="ekf_node_name" default="ekf_localizer_lidar"/>
+
+  <group>
+    <push-ros-namespace namespace="localization/lidar"/>
+
+    <!-- LiDAR Pose -> PoseWithCovariance -->
+    <node pkg="pose_to_pose_with_cov" exec="pose_to_pose_with_cov" name="pose_converter_lidar" output="screen">
+      <param name="input_topic" value="/current_pose"/>
+      <param name="output_topic" value="/ndt_pose_with_covariance"/>
+      <param name="expected_frame_id" value="map"/>
+
+      <!-- LiDAR용 공분산 -->
+      <param name="sigma_xy_m" value="0.05"/>
+      <param name="sigma_yaw_deg" value="1.0"/>
+      <param name="use_zrp" value="false"/>
+      <param name="sigma_z_m" value="0.05"/>
+      <param name="sigma_rp_deg" value="1.0"/>
+      <param name="big_unc" value="1000000.0"/>
+    </node>
+
+    <!-- EKF -->
+    <node pkg="ekf_localizer" exec="ekf_localizer" name="$(var ekf_node_name)" output="screen">
+      <remap from="in_pose_with_covariance" to="/ndt_pose_with_covariance"/>
+      <remap from="in_twist_with_covariance" to="/gyro_twist_with_covariance_lidar"/>
+      <remap from="initialpose" to="/initialpose"/>
+      <remap from="trigger_node_srv" to="trigger_node"/>
+
+      <param from="$(var param_file)"/>
+      <param name="ekf_mode" value="$(var ekf_mode)"/>
+      <param name="pose_frame_id" value="map"/>
+      <param name="use_sim_time" value="false"/>
+    </node>
+
+    <node pkg="initial_pose_publisher" exec="lidar2initialpose" name="lidar2initialpose" output="screen"/>
+  </group>
+</launch>

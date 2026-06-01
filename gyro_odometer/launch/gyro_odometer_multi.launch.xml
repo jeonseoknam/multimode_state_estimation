@@ -1,0 +1,71 @@
+<launch>
+  <!-- =========================
+       LiDAR EKF용 gyro_odometer
+       ========================= -->
+  <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer.launch.xml">
+    <arg name="input_vehicle_twist_with_covariance_topic" value="/vehicle/twist_with_covariance"/>
+    <arg name="input_imu_topic" value="/morai/imu"/>
+
+    <arg name="output_twist_raw_topic" value="/gyro_twist_raw_lidar"/>
+    <arg name="output_twist_with_covariance_raw_topic" value="/gyro_twist_with_covariance_raw_lidar"/>
+
+    <arg name="output_twist_topic" value="/gyro_twist_lidar"/>
+    <arg name="output_twist_with_covariance_topic" value="/gyro_twist_with_covariance_lidar"/>
+
+    <arg name="output_frame" value="base_link"/>
+    <arg name="message_timeout_sec" value="0.2"/>
+
+    <!-- LiDAR용 -->
+    <arg name="min_vx_std" value="0.5"/>
+    <arg name="min_vy_std" value="0.1"/>
+    <arg name="min_yaw_std" value="0.5"/>
+    <arg name="cov_inflate_factor" value="5.0"/>
+  </include>
+
+  <!-- =========================
+       GNSS EKF용 gyro_odometer
+       ========================= -->
+  <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer.launch.xml">
+    <arg name="input_vehicle_twist_with_covariance_topic" value="/vehicle/twist_with_covariance"/>
+    <arg name="input_imu_topic" value="/morai/imu"/>
+
+    <arg name="output_twist_raw_topic" value="/gyro_twist_raw_gnss"/>
+    <arg name="output_twist_with_covariance_raw_topic" value="/gyro_twist_with_covariance_raw_gnss"/>
+
+    <arg name="output_twist_topic" value="/gyro_twist_gnss"/>
+    <arg name="output_twist_with_covariance_topic" value="/gyro_twist_with_covariance_gnss"/>
+
+    <arg name="output_frame" value="base_link"/>
+    <arg name="message_timeout_sec" value="0.2"/>
+
+    <!-- GNSS용 -->
+    <arg name="min_vx_std" value="0.8"/>
+    <arg name="min_vy_std" value="0.3"/>
+    <arg name="min_yaw_std" value="0.5"/>
+    <arg name="cov_inflate_factor" value="10.0"/>
+  </include>
+
+  <!-- =========================
+       Camera EKF용 gyro_odometer
+       ========================= -->
+  <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer.launch.xml">
+    <arg name="input_vehicle_twist_with_covariance_topic" value="/vehicle/twist_with_covariance"/>
+    <arg name="input_imu_topic" value="/morai/imu"/>
+
+    <arg name="output_twist_raw_topic" value="/gyro_twist_raw_camera"/>
+    <arg name="output_twist_with_covariance_raw_topic" value="/gyro_twist_with_covariance_raw_camera"/>
+
+    <arg name="output_twist_topic" value="/gyro_twist_camera"/>
+    <arg name="output_twist_with_covariance_topic" value="/gyro_twist_with_covariance_camera"/>
+
+    <arg name="output_frame" value="base_link"/>
+    <arg name="message_timeout_sec" value="0.2"/>
+
+    <!-- Camera용:
+         처음엔 LiDAR와 비슷하게 두고 시작 -->
+    <arg name="min_vx_std" value="0.5"/>
+    <arg name="min_vy_std" value="0.1"/>
+    <arg name="min_yaw_std" value="0.5"/>
+    <arg name="cov_inflate_factor" value="5.0"/>
+  </include>
+</launch>

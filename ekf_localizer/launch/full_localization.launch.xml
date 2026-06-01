@@ -1,7 +1,20 @@
 <launch>
-	<include file="$(find-pkg-share odom_to_twist_converter)/launch/odom_to_twist_converter.launch.xml" />
-	<include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer.launch.xml" />
-	<include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer.launch.xml" />
-	<include file="$(find-pkg-share lidarslam)/launch/localization.launch.py" />
-	<include file="$(find-pkg-share carstate_3d)/launch/carstate_3d_launch.py"/>
-</launch>	
+  <arg name="gnss_input_topic" default="/gnss_pose_localcartesian"
+       description="Set to /gnss_pose_localcartesian_faulty for fault injection experiments"/>
+
+  <include file="$(find-pkg-share odom_to_twist_converter)/launch/odom_to_twist_converter.launch.xml" />
+
+  <!-- LiDAR, GNSS용 gyro_odometer를 동시에 띄움 -->
+  <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer_multi.launch.xml" />
+
+  <!-- LiDAR용 ekf_localizer -->
+  <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_lidar.launch.xml" />
+
+  <!-- GNSS용 ekf_localizer -->
+  <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_gnss.launch.xml">
+    <arg name="gnss_input_topic" value="$(var gnss_input_topic)"/>
+  </include>
+
+  <!-- Camera용 ekf_localizer -->
+  <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_camera.launch.xml" />
+</launch>

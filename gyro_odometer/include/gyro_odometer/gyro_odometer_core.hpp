@@ -44,6 +44,14 @@ public:
   explicit GyroOdometer(const rclcpp::NodeOptions & options);
   ~GyroOdometer();
 
+  geometry_msgs::msg::TwistWithCovarianceStamped concatGyroAndOdometer(
+  const std::deque<geometry_msgs::msg::TwistWithCovarianceStamped> & vehicle_twist_queue,
+  const std::deque<sensor_msgs::msg::Imu> & gyro_queue,
+  double min_vx_std,
+  double min_vy_std,
+  double min_yaw_std,
+  double cov_inflate_factor);
+
 private:
   
   void callbackVehicleTwist(const geometry_msgs::msg::TwistWithCovarianceStamped::ConstSharedPtr vehicle_twist_msg_ptr);
@@ -66,6 +74,12 @@ private:
 
   std::string output_frame_;
   double message_timeout_sec_;
+
+  // 여러 개의 노드를 띄우기 위한 파라미터화
+  double min_vx_std_;
+  double min_vy_std_;
+  double min_yaw_std_;
+  double cov_inflate_factor_;
 
   bool vehicle_twist_arrived_;
   bool imu_arrived_;

@@ -1,7 +1,7 @@
 <launch>
   <arg name="input_vehicle_twist_with_covariance_topic" default="/vehicle/twist_with_covariance" description="input twist with covariance topic name from vehicle"/>
 
-  <arg name="input_imu_topic" default="/sensors/imu/raw" description="input imu topic name"/>
+  <arg name="input_imu_topic" default="/morai/imu" description="input imu topic name"/>
 
   <arg name="output_twist_raw_topic" default="gyro_twist_raw" description="output raw twist topic name"/>
   <arg name="output_twist_with_covariance_raw_topic" default="gyro_twist_with_covariance_raw" description="output raw twist with covariance topic name"/>
@@ -26,7 +26,5 @@
     <param name="use_sim_time" value="false"/>
   </node>
 
-  <node pkg="tf2_ros" exec="static_transform_publisher" name="imu_to_base_link_broadcaster"
-  args="0.07 0 0.05 0 0 0.7071068 0.7071068 base_link imu" />
-  
+
 </launch>

@@ -39,9 +39,13 @@ std::array<double, 9> transformCovariance(const std::array<double, 9> & cov)
   return cov_transformed;
 }
 
-geometry_msgs::msg::TwistWithCovarianceStamped concatGyroAndOdometer(
+geometry_msgs::msg::TwistWithCovarianceStamped GyroOdometer::concatGyroAndOdometer(
   const std::deque<geometry_msgs::msg::TwistWithCovarianceStamped> & vehicle_twist_queue,
-  const std::deque<sensor_msgs::msg::Imu> & gyro_queue)
+  const std::deque<sensor_msgs::msg::Imu> & gyro_queue,
+  double min_vx_std,
+  double min_vy_std,
+  double min_yaw_std,
+  double cov_inflate_factor)
 {
   using COV_IDX_XYZ = tier4_autoware_utils::xyz_covariance_index::XYZ_COV_IDX;
   using COV_IDX_XYZRPY = tier4_autoware_utils::xyzrpy_covariance_index::XYZRPY_COV_IDX;
@@ -104,31 +108,21 @@ geometry_msgs::msg::TwistWithCovarianceStamped concatGyroAndOdometer(
   double vy_cov  = vy_covariance_original / vehicle_twist_queue.size();
   double yaw_cov = gyro_covariance_original.z / gyro_queue.size();
 
-  // 2) 최소 표준편차 바닥값 설정 (원하는 값으로 튜닝)
-  //    예) vx: 0.2 m/s, vy: 0.2 m/s, yaw: 0.2 rad/s
-  constexpr double MIN_VX_STD  = 0.2;
-  constexpr double MIN_VY_STD  = 0.2;
-  constexpr double MIN_YAW_STD = 0.2;
-
-  const double MIN_VX_COV  = MIN_VX_STD  * MIN_VX_STD;
-  const double MIN_VY_COV  = MIN_VY_STD  * MIN_VY_STD;
-  const double MIN_YAW_COV = MIN_YAW_STD * MIN_YAW_STD;
+  const double MIN_VX_COV  = min_vx_std  * min_vx_std;
+  const double MIN_VY_COV  = min_vy_std  * min_vy_std;
+  const double MIN_YAW_COV = min_yaw_std * min_yaw_std;
 
   vx_cov  = std::max(vx_cov,  MIN_VX_COV);
   vy_cov  = std::max(vy_cov,  MIN_VY_COV);
   yaw_cov = std::max(yaw_cov, MIN_YAW_COV);
 
-  // 3) 전체적인 신뢰도를 떨어뜨리기 위한 inflation factor
-  //    (처음에는 5.0 정도로 시작해서, 필요하면 2~10 사이로 조절)
-  constexpr double COV_INFLATE_FACTOR = 5.0;
-
-  vx_cov  *= COV_INFLATE_FACTOR;
-  vy_cov  *= COV_INFLATE_FACTOR;
-  yaw_cov *= COV_INFLATE_FACTOR;
+  vx_cov  *= cov_inflate_factor;
+  vy_cov  *= cov_inflate_factor;
+  yaw_cov *= cov_inflate_factor;
 
   // 4) 최종 covariance 대입
   twist_with_cov.twist.covariance[COV_IDX_XYZRPY::X_X]     = vx_cov;
-  twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Y_Y]     = vy_cov;
+  twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Y_Y]     = 100000.0;
   twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Z_Z]     = 100000.0;
   twist_with_cov.twist.covariance[COV_IDX_XYZRPY::ROLL_ROLL]  = 100000.0;
   twist_with_cov.twist.covariance[COV_IDX_XYZRPY::PITCH_PITCH] = 100000.0;
@@ -136,25 +130,25 @@ geometry_msgs::msg::TwistWithCovarianceStamped concatGyroAndOdometer(
 
   // From a statistical point of view, here we reduce the covariances according to the number of
   // observed data
-  twist_with_cov.twist.covariance[COV_IDX_XYZRPY::X_X] =
-    vx_covariance_original / vehicle_twist_queue.size();
+  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::X_X] =
+  //   vx_covariance_original / vehicle_twist_queue.size();
 
-  twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Y_Y] = 100000.0;
-  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Y_Y] =
-  //   vy_covariance_original / vehicle_twist_queue.size();
+  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Y_Y] = 100000.0;
+  // // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Y_Y] =
+  // //   vy_covariance_original / vehicle_twist_queue.size();
     
-  twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Z_Z] = 100000.0;
-  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::ROLL_ROLL] =
-  // gyro_covariance_original.x / gyro_queue.size();
-  twist_with_cov.twist.covariance[COV_IDX_XYZRPY::ROLL_ROLL] = 100000.0;
+  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::Z_Z] = 100000.0;
+  // // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::ROLL_ROLL] =
+  // // gyro_covariance_original.x / gyro_queue.size();
+  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::ROLL_ROLL] = 100000.0;
 
-  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::PITCH_PITCH] =
-  //  gyro_covariance_original.y / gyro_queue.size();
-  twist_with_cov.twist.covariance[COV_IDX_XYZRPY::PITCH_PITCH] = 100000.0;
+  // // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::PITCH_PITCH] =
+  // //  gyro_covariance_original.y / gyro_queue.size();
+  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::PITCH_PITCH] = 100000.0;
 
-  twist_with_cov.twist.covariance[COV_IDX_XYZRPY::YAW_YAW] =
-    gyro_covariance_original.z / gyro_queue.size();
-  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::YAW_YAW] = 100000.0;
+  // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::YAW_YAW] =
+  //   gyro_covariance_original.z / gyro_queue.size();
+  // // twist_with_cov.twist.covariance[COV_IDX_XYZRPY::YAW_YAW] = 100000.0;
 
   return twist_with_cov;
 }
@@ -163,16 +157,30 @@ GyroOdometer::GyroOdometer(const rclcpp::NodeOptions & options)
 : Node("gyro_odometer", options),
   output_frame_(declare_parameter("output_frame", "base_link")),
   message_timeout_sec_(declare_parameter("message_timeout_sec", 0.2)),
+  min_vx_std_(declare_parameter("min_vx_std", 0.5)),
+  min_vy_std_(declare_parameter("min_vy_std", 0.1)),
+  min_yaw_std_(declare_parameter("min_yaw_std", 0.5)),
+  cov_inflate_factor_(declare_parameter("cov_inflate_factor", 5.0)),
   vehicle_twist_arrived_(false),
   imu_arrived_(false)
 {
   transform_listener_ = std::make_shared<tier4_autoware_utils::TransformListener>(this);
 
+  // vehicle_twist_sub_ = create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+  //   "vehicle/twist_with_covariance", rclcpp::QoS{1},
+  //   std::bind(&GyroOdometer::callbackVehicleTwist, this, std::placeholders::_1));
   vehicle_twist_sub_ = create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
-    "vehicle/twist_with_covariance", rclcpp::QoS{1},
-    std::bind(&GyroOdometer::callbackVehicleTwist, this, std::placeholders::_1));
+  "vehicle/twist_with_covariance",
+  rclcpp::SensorDataQoS().keep_last(64),
+  std::bind(&GyroOdometer::callbackVehicleTwist, this, std::placeholders::_1));
+
+
+  // imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+  //   "/morai/imu", rclcpp::QoS{1}, std::bind(&GyroOdometer::callbackImu, this, std::placeholders::_1));
   imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
-    "imu", rclcpp::QoS{1}, std::bind(&GyroOdometer::callbackImu, this, std::placeholders::_1));
+  "/morai/imu",
+  rclcpp::SensorDataQoS().keep_last(64),
+  std::bind(&GyroOdometer::callbackImu, this, std::placeholders::_1));
 
   twist_raw_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("twist_raw", rclcpp::QoS{10});
   twist_with_covariance_raw_pub_ = create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>(
@@ -182,6 +190,10 @@ GyroOdometer::GyroOdometer(const rclcpp::NodeOptions & options)
   twist_with_covariance_pub_ = create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>(
     "twist_with_covariance", rclcpp::QoS{1});
 
+  RCLCPP_INFO(this->get_logger(), "min_vx_std = %.3f", min_vx_std_);
+  RCLCPP_INFO(this->get_logger(), "min_vy_std = %.3f", min_vy_std_);
+  RCLCPP_INFO(this->get_logger(), "min_yaw_std = %.3f", min_yaw_std_);
+  RCLCPP_INFO(this->get_logger(), "cov_inflate_factor = %.3f", cov_inflate_factor_);
   // TODO(YamatoAndo) createTimer
 }
 
@@ -224,7 +236,13 @@ void GyroOdometer::callbackVehicleTwist(
   }
 
   const geometry_msgs::msg::TwistWithCovarianceStamped twist_with_cov_raw =
-    concatGyroAndOdometer(vehicle_twist_queue_, gyro_queue_);
+  concatGyroAndOdometer(
+    vehicle_twist_queue_,
+    gyro_queue_,
+    min_vx_std_,
+    min_vy_std_,
+    min_yaw_std_,
+    cov_inflate_factor_);
   publishData(twist_with_cov_raw);
   vehicle_twist_queue_.clear();
   gyro_queue_.clear();
@@ -292,7 +310,13 @@ void GyroOdometer::callbackImu(const sensor_msgs::msg::Imu::ConstSharedPtr imu_m
   }
 
   const geometry_msgs::msg::TwistWithCovarianceStamped twist_with_cov_raw =
-    concatGyroAndOdometer(vehicle_twist_queue_, gyro_queue_);
+  concatGyroAndOdometer(
+    vehicle_twist_queue_,
+    gyro_queue_,
+    min_vx_std_,
+    min_vy_std_,
+    min_yaw_std_,
+    cov_inflate_factor_);
   publishData(twist_with_cov_raw);
   vehicle_twist_queue_.clear();
   gyro_queue_.clear();
