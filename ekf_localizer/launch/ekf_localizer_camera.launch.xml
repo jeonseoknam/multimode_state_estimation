@@ -23,7 +23,6 @@
       <param name="sigma_rp_deg" value="1.0"/>
       <param name="big_unc" value="1000000.0"/>
 
-      <param name="use_sim_time" value="false"/>
     </node>
 
     <!-- Camera EKF -->
@@ -43,7 +42,6 @@
       <param from="$(var param_file)"/>
       <param name="ekf_mode" value="$(var ekf_mode)"/>
       <param name="pose_frame_id" value="map"/>
-      <param name="use_sim_time" value="false"/>
     </node>
   </group>
 </launch>
