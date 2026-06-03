@@ -9,11 +9,11 @@
     pose_additional_delay: 0.0
     pose_measure_uncertainty_time: 0.0
     pose_smoothing_steps: 1
-    pose_gate_dist: 100.0
+    pose_gate_dist: 300.0
 
     twist_additional_delay: 0.0
     twist_smoothing_steps: 1
-    twist_gate_dist: 100.0
+    twist_gate_dist: 300.0
 
     proc_stddev_yaw_c: 0.1
     proc_stddev_vx_c: 1.0

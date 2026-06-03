@@ -2,7 +2,9 @@
 #include "rclcpp/qos.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "std_msgs/msg/bool.hpp"
 
+#include <atomic>
 #include <cmath>
 #include <string>
 
@@ -28,9 +30,18 @@ public:
 
     declare_parameter<double>("big_unc", 1e6);          // 관측하지 않는 축의 큰 분산
 
+    // Optional health gate: when set, this node only forwards measurements
+    // while the boolean published on `health_topic` is True. Used to prevent
+    // a faulty raw pose (during a GUI fault injection) from contaminating the
+    // EKF state — without this, the EKF eventually accepts the bad
+    // measurement and then takes a long time to catch up after recovery.
+    // Empty string disables the gate (preserves original behaviour).
+    declare_parameter<std::string>("health_topic", "");
+
     const std::string input_topic = get_parameter("input_topic").as_string();
     const std::string output_topic = get_parameter("output_topic").as_string();
     const std::string expected_frame = get_parameter("expected_frame_id").as_string();
+    const std::string health_topic = get_parameter("health_topic").as_string();
 
     // -------------------------------
     // Subscriber
@@ -49,15 +60,43 @@ public:
       output_topic,
       rclcpp::QoS(10));
 
+    // -------------------------------
+    // Optional health gate subscriber
+    // -------------------------------
+    if (!health_topic.empty()) {
+      sub_health_ = create_subscription<std_msgs::msg::Bool>(
+        health_topic,
+        rclcpp::QoS(10),
+        [this](const std_msgs::msg::Bool::SharedPtr msg) {
+          this->healthy_.store(msg->data);
+        });
+    }
+
     RCLCPP_INFO(this->get_logger(), "pose_to_pose_with_cov started");
     RCLCPP_INFO(this->get_logger(), "  input_topic       : %s", input_topic.c_str());
     RCLCPP_INFO(this->get_logger(), "  output_topic      : %s", output_topic.c_str());
     RCLCPP_INFO(this->get_logger(), "  expected_frame_id : %s", expected_frame.c_str());
+    if (!health_topic.empty()) {
+      RCLCPP_INFO(this->get_logger(), "  health_topic      : %s (gate enabled)",
+        health_topic.c_str());
+    } else {
+      RCLCPP_INFO(this->get_logger(), "  health_topic      : (none — gate disabled)");
+    }
   }
 
 private:
   void callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
   {
+    // Health gate: if a health_topic was configured and it is currently
+    // False, suppress this measurement entirely so the downstream EKF state
+    // is not corrupted by the faulty pose. EKF will simply run
+    // prediction-only during the fault, then resume normally as soon as the
+    // first post-recovery measurement comes through (state hasn't been
+    // dragged toward the fault, so the Mahalanobis gate passes immediately).
+    if (!healthy_.load()) {
+      return;
+    }
+
     const std::string expected_frame = get_parameter("expected_frame_id").as_string();
 
     const double sigma_xy_m    = get_parameter("sigma_xy_m").as_double();
@@ -106,7 +145,13 @@ private:
   }
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_health_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_;
+
+  // True = pass measurements through. Defaults to True so that when the
+  // gate is disabled (no health_topic) or the health publisher hasn't sent
+  // its first message yet, the node still forwards data.
+  std::atomic<bool> healthy_{true};
 };
 
 int main(int argc, char ** argv)

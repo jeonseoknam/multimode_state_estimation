@@ -10,12 +10,12 @@
     pose_additional_delay: 0.00
     pose_measure_uncertainty_time: 0.00
     pose_smoothing_steps: 1  # 연산량 감소
-    pose_gate_dist: 200.0
+    pose_gate_dist: 300.0
 
     # for twist measurement
     twist_additional_delay: 0.00
     twist_smoothing_steps: 1
-    twist_gate_dist: 200.0
+    twist_gate_dist: 300.0
 
     # for process model
     proc_stddev_yaw_c: 1.0

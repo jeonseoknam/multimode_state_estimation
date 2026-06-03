@@ -19,6 +19,9 @@
       <param name="sigma_z_m" value="0.05"/>
       <param name="sigma_rp_deg" value="1.0"/>
       <param name="big_unc" value="1000000.0"/>
+
+      <!-- Suppress measurements while LiDAR is flagged unhealthy. -->
+      <param name="health_topic" value="/multimode/lidar_healthy"/>
     </node>
 
     <!-- EKF -->

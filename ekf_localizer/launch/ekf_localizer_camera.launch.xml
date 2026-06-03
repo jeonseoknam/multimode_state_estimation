@@ -23,6 +23,9 @@
       <param name="sigma_rp_deg" value="1.0"/>
       <param name="big_unc" value="1000000.0"/>
 
+      <!-- Suppress measurements while the camera is flagged unhealthy. -->
+      <param name="health_topic" value="/multimode/camera_healthy"/>
+
     </node>
 
     <!-- Camera EKF -->
