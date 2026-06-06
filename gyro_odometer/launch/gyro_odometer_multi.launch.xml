@@ -15,11 +15,13 @@
     <arg name="output_frame" value="base_link"/>
     <arg name="message_timeout_sec" value="0.2"/>
 
-    <!-- LiDAR용 -->
-    <arg name="min_vx_std" value="0.5"/>
+    <!-- LiDAR용. 기존 0.5 / inflate 5.0 → vx_cov 1.25 로 과도해서 EKF가
+         직접 속도 측정을 무시하고 vx를 절반으로 추정하던 문제 수정.
+         min_vx_std 0.2 + inflate 1.0 → vx_cov 0.04 (pose R과 균형). -->
+    <arg name="min_vx_std" value="1.5"/>
     <arg name="min_vy_std" value="0.1"/>
     <arg name="min_yaw_std" value="0.5"/>
-    <arg name="cov_inflate_factor" value="5.0"/>
+    <arg name="cov_inflate_factor" value="1.0"/>
   </include>
 
   <!-- =========================
@@ -38,11 +40,13 @@
     <arg name="output_frame" value="base_link"/>
     <arg name="message_timeout_sec" value="0.2"/>
 
-    <!-- GNSS용 -->
-    <arg name="min_vx_std" value="0.8"/>
+    <!-- GNSS용. 기존 0.8 / inflate 10.0 → vx_cov 6.4 로 가장 과도했음.
+         twist source가 모든 EKF 공통(/vehicle/twist)이므로 LiDAR와 동일
+         하게 통일: min_vx_std 0.2 + inflate 1.0 → vx_cov 0.04. -->
+    <arg name="min_vx_std" value="1.5"/>
     <arg name="min_vy_std" value="0.3"/>
     <arg name="min_yaw_std" value="0.5"/>
-    <arg name="cov_inflate_factor" value="10.0"/>
+    <arg name="cov_inflate_factor" value="1.0"/>
   </include>
 
   <!-- =========================
@@ -61,11 +65,11 @@
     <arg name="output_frame" value="base_link"/>
     <arg name="message_timeout_sec" value="0.2"/>
 
-    <!-- Camera용:
-         처음엔 LiDAR와 비슷하게 두고 시작 -->
-    <arg name="min_vx_std" value="0.5"/>
+    <!-- Camera용. LiDAR/GNSS와 동일하게 통일 (twist source 공통).
+         min_vx_std 0.2 + inflate 1.0 → vx_cov 0.04. -->
+    <arg name="min_vx_std" value="1.5"/>
     <arg name="min_vy_std" value="0.1"/>
     <arg name="min_yaw_std" value="0.5"/>
-    <arg name="cov_inflate_factor" value="5.0"/>
+    <arg name="cov_inflate_factor" value="1.0"/>
   </include>
 </launch>

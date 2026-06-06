@@ -12,6 +12,16 @@
   <arg name="output_frame" default="base_link" description="output frame id"/>
   <arg name="message_timeout_sec" default="0.2" description="delay tolerance time for message"/>
 
+  <!-- Twist covariance tuning. These were previously NOT declared here, so
+       any value passed from gyro_odometer_multi.launch.xml was silently
+       dropped and the node fell back to its core defaults (min_vx_std=0.5,
+       cov_inflate_factor=5.0 -> vx_cov=1.25). Now they are forwarded to
+       the node so the multi-launch per-sensor values actually take effect. -->
+  <arg name="min_vx_std" default="0.2" description="min stddev for vx [m/s]"/>
+  <arg name="min_vy_std" default="0.1" description="min stddev for vy [m/s]"/>
+  <arg name="min_yaw_std" default="0.5" description="min stddev for yaw rate [rad/s]"/>
+  <arg name="cov_inflate_factor" default="1.0" description="multiplier on twist covariance"/>
+
   <node pkg="gyro_odometer" exec="gyro_odometer" name="gyro_odometer" output="screen">
     <remap from="vehicle/twist_with_covariance" to="$(var input_vehicle_twist_with_covariance_topic)"/>
     <remap from="imu" to="$(var input_imu_topic)"/>
@@ -23,6 +33,10 @@
 
     <param name="output_frame" value="$(var output_frame)"/>
     <param name="message_timeout_sec" value="$(var message_timeout_sec)"/>
+    <param name="min_vx_std" value="$(var min_vx_std)"/>
+    <param name="min_vy_std" value="$(var min_vy_std)"/>
+    <param name="min_yaw_std" value="$(var min_yaw_std)"/>
+    <param name="cov_inflate_factor" value="$(var cov_inflate_factor)"/>
   </node>
 
 

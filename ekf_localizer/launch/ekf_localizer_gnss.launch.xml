@@ -23,8 +23,13 @@
       <!-- frame -->
       <param name="expected_frame_id" value="map"/>
 
-      <!-- LiDAR와 동일한 공분산 -->
-      <param name="sigma_xy_m" value="0.05"/>
+      <!-- Per-sensor measurement covariance, differentiated by modality.
+           Relative order follows single-sensor EKF RMSE (GNSS most
+           accurate), but the absolute scale is the raw-measurement noise
+           (a single NDT/GNSS/VO fix), NOT the EKF-output RMSE — the first
+           pass used the RMSE (0.35) and that over-inflated R, making the
+           EKF lag/drift ahead of the measurement. GNSS = smallest sigma. -->
+      <param name="sigma_xy_m" value="0.10"/>
       <param name="sigma_yaw_deg" value="1.0"/>
       <param name="use_zrp" value="false"/>
       <param name="sigma_z_m" value="0.05"/>

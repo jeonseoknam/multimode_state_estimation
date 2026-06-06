@@ -12,8 +12,11 @@
       <param name="output_topic" value="/ndt_pose_with_covariance"/>
       <param name="expected_frame_id" value="map"/>
 
-      <!-- LiDAR용 공분산 -->
-      <param name="sigma_xy_m" value="0.05"/>
+      <!-- Per-sensor measurement covariance, differentiated by modality.
+           Mid scale between GNSS (0.18) and Camera (0.40). Absolute scale
+           is raw-measurement noise, not EKF-output RMSE (first pass used
+           0.50 which over-inflated R and caused EKF lag/drift). -->
+      <param name="sigma_xy_m" value="0.10"/>
       <param name="sigma_yaw_deg" value="1.0"/>
       <param name="use_zrp" value="false"/>
       <param name="sigma_z_m" value="0.05"/>
