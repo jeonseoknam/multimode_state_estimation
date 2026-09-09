@@ -1,4 +1,16 @@
 <launch>
+  <!-- 하위 EKF 가 구독할 속도(twist) 측정 토픽. 기본값은 모듈 전용
+       gyro_odometer 인스턴스의 출력이라 기존 동작과 동일하다.
+       full_localization.launch.xml 이 use_shared_gyro:=true 로 실행되면
+       세 EKF 모두 하나의 공유 인스턴스 출력을 가리키도록 덮어쓴다. -->
+  <arg name="twist_topic" default="/gyro_twist_with_covariance_lidar"/>
+  <!-- Measurement-layer health gate topic. pose_to_pose_with_cov drops this
+       module's measurement while the flag on this topic is false. Pass an
+       empty string to disable the gate, which is what an honest "no gating"
+       ablation row needs: with the gate left on, a faulty measurement is
+       already suppressed one layer UPSTREAM of the fusion, so an ungated
+       fusion never actually sees the fault. -->
+  <arg name="health_topic" default="/multimode/lidar_healthy"/>
   <arg name="param_file" default="$(find-pkg-share ekf_localizer)/config/ekf_localizer_lidar.param.yaml"/>
   <arg name="ekf_mode" default="lidar"/>
   <arg name="ekf_node_name" default="ekf_localizer_lidar"/>
@@ -12,11 +24,17 @@
       <param name="output_topic" value="/ndt_pose_with_covariance"/>
       <param name="expected_frame_id" value="map"/>
 
-      <!-- Per-sensor measurement covariance, differentiated by modality.
-           Mid scale between GNSS (0.18) and Camera (0.40). Absolute scale
-           is raw-measurement noise, not EKF-output RMSE (first pass used
-           0.50 which over-inflated R and caused EKF lag/drift). -->
-      <param name="sigma_xy_m" value="0.10"/>
+      <!-- LiDAR honest measurement R: set to the actual NDT error (~0.2 m),
+           not the optimistic 0.05. With honest R(0.2)+Q(2.0) the EKF output
+           covariance is consistent without any output scaling (white-ish NDT
+           error → single R can serve gain AND honest uncertainty). -->
+      <param name="sigma_xy_m" value="0.36"/>
+      <!-- Anisotropic measurement R was tried (sigma_lon/lat) to make the EKF
+           output consistent, but inflating measurement R = telling the EKF to
+           distrust the measurement → longitudinal drift (RMSE 0.27→1.55).
+           Reverted to isotropic 0.05. Output-covariance consistency is handled
+           downstream by the cov_calibrator node instead (EKF stays accurate,
+           only the fusion-input covariance is scaled). -->
       <param name="sigma_yaw_deg" value="1.0"/>
       <param name="use_zrp" value="false"/>
       <param name="sigma_z_m" value="0.05"/>
@@ -24,19 +42,46 @@
       <param name="big_unc" value="1000000.0"/>
 
       <!-- Suppress measurements while LiDAR is flagged unhealthy. -->
-      <param name="health_topic" value="/multimode/lidar_healthy"/>
+      <param name="health_topic" value="$(var health_topic)"/>
     </node>
 
     <!-- EKF -->
     <node pkg="ekf_localizer" exec="ekf_localizer" name="$(var ekf_node_name)" output="screen">
       <remap from="in_pose_with_covariance" to="/ndt_pose_with_covariance"/>
-      <remap from="in_twist_with_covariance" to="/gyro_twist_with_covariance_lidar"/>
+      <remap from="in_twist_with_covariance" to="$(var twist_topic)"/>
       <remap from="initialpose" to="/initialpose"/>
+      <!-- LiDAR 결함 회복 시 이 EKF 만 하드 리셋하는 전용 입력
+           (lidar_recovery_reinitializer 가 여기로 발행; 다른 모달 EKF 는 영향 없음) -->
+      <remap from="recovery_initialpose" to="/localization/lidar/recovery_initialpose"/>
       <remap from="trigger_node_srv" to="trigger_node"/>
 
       <param from="$(var param_file)"/>
       <param name="ekf_mode" value="$(var ekf_mode)"/>
       <param name="pose_frame_id" value="map"/>
+      <!-- LiDAR: native honest covariance via R/Q tuning, NO output scaling.
+           오차가 거의 백색이라 honest R(=0.2)+Q(=2.0)만으로 출력 공분산이 일관
+           (ANEES≈1, inside≈84%). 따라서 pose_cov_scale=1.0 (스케일 불필요).
+           e2e 검증: end-to-end HG-SCIF 융합 일관(2026-06). -->
+      <param name="proc_stddev_vx_c" value="2.0"/>
+      <param name="proc_stddev_yaw_c" value="0.6"/>
+      <!-- 2026-08-31 recalibration against ground truth on raw_drive with the
+           regenerated Sim(3) atlas. Per-axis variance scales computed as
+           mean(e^2)/mean(P) in the vehicle frame; the longitudinal axis is by far
+           the most overconfident, which matches the known GT-timestamp lag.
+           Before: LiDAR normalised ANEES was measured at the run used for this fit. -->
+      <!-- 2026-09-02 recalibration, fault-free normal driving steady state
+           (75-130 s, 9 clean runs of 10). Two steps: the per-axis ratio sets
+           the anisotropy, then a single isotropic factor equal to the measured
+           2-D NEES sets the size. Fitting the two axis marginals alone does not
+           control the 2-D NEES when the covariance has an x-y correlation, which
+           is how the GNSS scale first overshot from 0.47 to 3.05. The evaluation
+           uses the published covariance as-is, so the single-module rows of the
+           paper table are measured numbers, not 1.00 by construction. -->
+      <param name="pose_cov_scale_lon" value="1.0"/>
+      <param name="pose_cov_scale_lat" value="1.0"/>
+      <param name="pose_cov_scale_yaw" value="1.0"/>
+      <!-- 모델 기반 P^D/P^I Joseph 분할 발행(원고 식5·6). combiner가 live 구독 -->
+      <param name="enable_split_cov" value="true"/>
     </node>
 
     <node pkg="initial_pose_publisher" exec="lidar2initialpose" name="lidar2initialpose" output="screen"/>

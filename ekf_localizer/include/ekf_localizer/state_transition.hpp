@@ -22,5 +22,10 @@ Vector6d predictNextState(const Vector6d & X_curr, const double dt);
 Matrix6d createStateTransitionMatrix(const Vector6d & X_curr, const double dt);
 Matrix6d processNoiseCovariance(
   const double proc_cov_yaw_d, const double proc_cov_vx_d, const double proc_cov_wz_d);
+// Same, plus a body-frame (longitudinal / lateral) position random walk rotated
+// into the map frame by yaw. proc_cov_x_d = proc_cov_y_d = 0 gives the 3-arg form.
+Matrix6d processNoiseCovariance(
+  const double proc_cov_yaw_d, const double proc_cov_vx_d, const double proc_cov_wz_d,
+  const double proc_cov_x_d, const double proc_cov_y_d, const double yaw);
 
 #endif  // EKF_LOCALIZER__STATE_TRANSITION_HPP_

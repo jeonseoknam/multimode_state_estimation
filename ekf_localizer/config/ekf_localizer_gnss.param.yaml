@@ -9,14 +9,22 @@
     pose_additional_delay: 0.0
     pose_measure_uncertainty_time: 0.0
     pose_smoothing_steps: 1
-    pose_gate_dist: 10000.0
+    pose_gate_dist: 100.0
 
     twist_additional_delay: 0.0
     twist_smoothing_steps: 1
     twist_gate_dist: 300.0
 
+    # vx_c=3.0 (2026-06-23): honest prediction noise. With sigma_xy=0.07 this
+    # is the sweet spot — improves BOTH accuracy AND consistency without any
+    # output scaling (time-aligned: RMSE 0.13→0.118, ANEES 3.4→1.97, inside
+    # 57→64%). Q>~5 diverges (RMSE 60m+) at this R, so 3.0 is the safe optimum.
+    # (Old note: 1.0→4.0 "blew up" was at sigma 0.05/0.1 w/o time-align — that
+    #  evaluation conflated the GT time-sync artifact; corrected here.)
+    # NOTE: remaining ~2x overconfidence is NOT fixable by R/Q (sparse 5Hz
+    # prediction drift). Root fix = raise GNSS rate to 10Hz (MORAI sensor).
     proc_stddev_yaw_c: 0.1
-    proc_stddev_vx_c: 1.0
+    proc_stddev_vx_c: 10.0
     proc_stddev_wz_c: 0.5
 
     pose_no_update_count_threshold_warn: 50

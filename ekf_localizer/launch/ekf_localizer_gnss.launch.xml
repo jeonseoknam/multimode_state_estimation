@@ -1,5 +1,22 @@
 <launch>
+  <!-- 하위 EKF 가 구독할 속도(twist) 측정 토픽. 기본값은 모듈 전용
+       gyro_odometer 인스턴스의 출력이라 기존 동작과 동일하다.
+       full_localization.launch.xml 이 use_shared_gyro:=true 로 실행되면
+       세 EKF 모두 하나의 공유 인스턴스 출력을 가리키도록 덮어쓴다. -->
+  <arg name="twist_topic" default="/gyro_twist_with_covariance_gnss"/>
+  <!-- Measurement-layer health gate topic. pose_to_pose_with_cov drops this
+       module's measurement while the flag on this topic is false. Pass an
+       empty string to disable the gate, which is what an honest "no gating"
+       ablation row needs: with the gate left on, a faulty measurement is
+       already suppressed one layer UPSTREAM of the fusion, so an ungated
+       fusion never actually sees the fault. -->
+  <arg name="health_topic" default="/multimode/gnss_healthy"/>
   <arg name="param_file" default="$(find-pkg-share ekf_localizer)/config/ekf_localizer_gnss.param.yaml"/>
+  <!-- Output covariance scales. Defaults are the deployed calibration; the
+       body-frame position process-noise A/B (config/ekf_localizer_gnss_qxy.param.yaml)
+       passes 1.0 / 1.0 so the published covariance is the filter's own P. -->
+  <arg name="pose_cov_scale_lon" default="40.02"/>
+  <arg name="pose_cov_scale_lat" default="0.91"/>
   <arg name="ekf_mode" default="gnss"/>
   <arg name="ekf_node_name" default="ekf_localizer_gnss"/>
   <arg name="gnss_input_topic" default="/gnss_pose_localcartesian_faulty"
@@ -29,7 +46,17 @@
            (a single NDT/GNSS/VO fix), NOT the EKF-output RMSE — the first
            pass used the RMSE (0.35) and that over-inflated R, making the
            EKF lag/drift ahead of the measurement. GNSS = smallest sigma. -->
-      <param name="sigma_xy_m" value="0.10"/>
+      <!-- LIVE full-pipeline R/Q sweep (raw_drive, 2026-06-25, pose_cov_scale=1):
+           sigma_xy=0.09 + proc_stddev_vx_c=10 → 2σ inside 86.7% (time-aligned,
+           = ideal 86.5%) with NO output scaling. Higher sigma degrades accuracy
+           (twist drift: 0.07→0.35 made lon RMSE 0.09→0.19). ⚠️ The earlier OFFLINE
+           sweep claim (sigma 0.35 consistent) was a TA artifact on the smooth
+           high-R trajectory — LIVE verification corrected it; sigma 0.09 is real.
+           Caveat: per-sample ANEES ~4.5 (rare GNSS excursions / TA-match residual
+           at turns); the 2σ-inclusion metric is consistent. -->
+      <param name="sigma_xy_m" value="0.55"/>
+      <!-- Anisotropic R reverted (caused EKF drift). Consistency handled by
+           cov_calibrator downstream. See lidar launch for detail. -->
       <param name="sigma_yaw_deg" value="1.0"/>
       <param name="use_zrp" value="false"/>
       <param name="sigma_z_m" value="0.05"/>
@@ -37,7 +64,7 @@
       <param name="big_unc" value="1000000.0"/>
 
       <!-- Suppress measurements while GNSS is flagged unhealthy. -->
-      <param name="health_topic" value="/multimode/gnss_healthy"/>
+      <param name="health_topic" value="$(var health_topic)"/>
 
     </node>
 
@@ -50,7 +77,7 @@
       <remap from="in_pose_with_covariance" to="/gnss_pose_with_covariance"/>
 
       <!-- twist 입력 -->
-      <remap from="in_twist_with_covariance" to="/gyro_twist_with_covariance_gnss"/>
+      <remap from="in_twist_with_covariance" to="$(var twist_topic)"/>
 
       <remap from="initialpose" to="/initialpose"/>
       <remap from="trigger_node_srv" to="trigger_node"/>
@@ -58,6 +85,34 @@
       <param from="$(var param_file)"/>
       <param name="ekf_mode" value="$(var ekf_mode)"/>
       <param name="pose_frame_id" value="map"/>
+      <!-- GNSS 출력 공분산 보정 = ×2.85 (10Hz 기준, eval_native_raw_10hz 검증).
+           ⚠️ 튜닝만으로는 일관 불가가 데이터로 확정됨(R·Q·rate 모두 실패):
+             - R 상향: 10Hz에서 47→24→1.5%로 붕괴
+             - Q 상향: 발산
+             - rate 상향: 같은 bag 5→10Hz에서 정확도는↑(RMSE 0.139→0.111)지만
+               일관성은↓(65→47%) — 갱신이 잦을수록 P가 더 수축해 과신 심화
+           ⚠️대정정(2026-06-25): "GNSS는 출력 스케일 필수"는 틀림. raw_drive offline
+           R/Q sweep 결과, 입력 R(sigma_xy)을 0.07→0.35로 키우면 출력 스케일 없이
+           (pose_cov_scale=1.0) ANEES 0.93·inside 87.8% 일관 달성. LiDAR(sigma_xy=0.2)
+           와 동일 원리 — sigma_xy=0.07이 너무 작았을 뿐. 따라서 ×2.85 출력 스케일 제거. -->
+      <!-- 2026-08-31 recalibration against ground truth on raw_drive with the
+           regenerated Sim(3) atlas. Per-axis variance scales computed as
+           mean(e^2)/mean(P) in the vehicle frame; the longitudinal axis is by far
+           the most overconfident, which matches the known GT-timestamp lag.
+           Before: GNSS normalised ANEES was measured at the run used for this fit. -->
+      <!-- 2026-09-02 recalibration, fault-free normal driving steady state
+           (75-130 s, 9 clean runs of 10). Two steps: the per-axis ratio sets
+           the anisotropy, then a single isotropic factor equal to the measured
+           2-D NEES sets the size. Fitting the two axis marginals alone does not
+           control the 2-D NEES when the covariance has an x-y correlation, which
+           is how the GNSS scale first overshot from 0.47 to 3.05. The evaluation
+           uses the published covariance as-is, so the single-module rows of the
+           paper table are measured numbers, not 1.00 by construction. -->
+      <param name="pose_cov_scale_lon" value="$(var pose_cov_scale_lon)"/>
+      <param name="pose_cov_scale_lat" value="$(var pose_cov_scale_lat)"/>
+      <param name="pose_cov_scale_yaw" value="1.0"/>
+      <!-- 모델 기반 P^D/P^I Joseph 분할 발행(원고 식5·6). combiner가 live 구독 -->
+      <param name="enable_split_cov" value="true"/>
     </node>
   </group>
 </launch>

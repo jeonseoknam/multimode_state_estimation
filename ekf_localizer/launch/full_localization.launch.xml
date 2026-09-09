@@ -1,20 +1,110 @@
 <launch>
   <arg name="gnss_input_topic" default="/gnss_pose_localcartesian"
        description="Set to /gnss_pose_localcartesian_faulty for fault injection experiments"/>
+  <arg name="twist_noise_vx_std" default="0.0"/>
+  <arg name="twist_noise_wz_std" default="0.0"/>
+  <arg name="twist_noise_seed" default="0"/>
+  <arg name="twist_vel_scale" default="1.0"
+       description="0.277777778 when replaying a legacy raw bag whose ground-truth odom twist is in km/h"/>
+  <arg name="cam_decimation" default="1"/>
+  <arg name="cam_sigma_xy_m" default="0.05"
+       description="Camera measurement position noise (m). 1.0 for headless localization-mode replay where ORB is ~1 m."/>
+  <arg name="lidar_health_topic" default="/multimode/lidar_healthy"/>
+  <arg name="gnss_health_topic" default="/multimode/gnss_healthy"/>
+  <arg name="camera_health_topic" default="/multimode/camera_healthy"/>
+  <!-- GNSS EKF variant selection for the body-frame position process-noise
+       A/B (docs/gnss_noise_reply). Defaults = deployed configuration.
 
-  <include file="$(find-pkg-share odom_to_twist_converter)/launch/odom_to_twist_converter.launch.xml" />
+       ⚠️ Why the default is the LIDAR yaml: launch-XML <arg> values leak
+       across sequential <include>s (an <arg default> in an included file is
+       ignored when the configuration is already set). The lidar include
+       sets param_file / ekf_mode / ekf_node_name first, so the gnss and
+       camera EKFs have always loaded ekf_localizer_lidar.param.yaml
+       (verified 2026-09-06 from the running nodes' params-file argument). Every
+       published result was produced that way, so the effective file is
+       made explicit here rather than "fixed"; ekf_localizer_gnss.param.yaml
+       and ekf_localizer_camera.param.yaml are NOT what runs. -->
+  <arg name="gnss_param_file" default="$(find-pkg-share ekf_localizer)/config/ekf_localizer_lidar.param.yaml"/>
+  <arg name="camera_param_file" default="$(find-pkg-share ekf_localizer)/config/ekf_localizer_lidar.param.yaml"/>
+  <arg name="gnss_pose_cov_scale_lon" default="40.02"/>
+  <arg name="gnss_pose_cov_scale_lat" default="0.91"/>
 
-  <!-- LiDAR, GNSS용 gyro_odometer를 동시에 띄움 -->
-  <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer_multi.launch.xml" />
+  <!-- ============================================================
+       gyro_odometer 인스턴스 통합 A/B
+       (docs/gyro_odometer/manuscript_text.md)
 
-  <!-- LiDAR용 ekf_localizer -->
-  <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_lidar.launch.xml" />
+       false (기본) : 하위 EKF 마다 gyro_odometer 인스턴스를 하나씩,
+                      총 3개 실행한다. 표 1~6 을 만든 구성 그대로.
+       true         : 세 하위 EKF 가 공유하는 인스턴스 1개만 실행하고
+                      세 EKF 가 그 출력을 함께 구독한다.
 
-  <!-- GNSS용 ekf_localizer -->
-  <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_gnss.launch.xml">
-    <arg name="gnss_input_topic" value="$(var gnss_input_topic)"/>
+       세 인스턴스는 같은 입력 토픽(/vehicle/twist_with_covariance,
+       /morai/imu)과 같은 유효 파라미터를 쓰므로 출력이 이미 서로 같다
+       (주행 구간 398/398 일치, 전 구간 2954/2956, 공분산 차이 0).
+       이 스위치는 통합해도 최종 추정 결과가 반복 실행 간 산포 이내에서
+       같은지 확인하기 위한 것이며, 기본값이 false 이므로 기존 실험은
+       그대로 재현된다.
+       ============================================================ -->
+  <arg name="use_shared_gyro" default="false"/>
+
+  <include file="$(find-pkg-share odom_to_twist_converter)/launch/odom_to_twist_converter.launch.xml">
+    <arg name="vel_scale" value="$(var twist_vel_scale)"/>
+    <arg name="noise_vx_std" value="$(var twist_noise_vx_std)"/>
+    <arg name="noise_wz_std" value="$(var twist_noise_wz_std)"/>
+    <arg name="noise_seed" value="$(var twist_noise_seed)"/>
   </include>
 
-  <!-- Camera용 ekf_localizer -->
-  <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_camera.launch.xml" />
+  <!-- 기본 경로: 모듈당 gyro_odometer 인스턴스 3개 -->
+  <group unless="$(var use_shared_gyro)">
+    <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer_multi.launch.xml" />
+
+    <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_lidar.launch.xml">
+      <arg name="health_topic" value="$(var lidar_health_topic)"/>
+      <arg name="twist_topic" value="/gyro_twist_with_covariance_lidar"/>
+    </include>
+
+    <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_gnss.launch.xml">
+      <arg name="gnss_input_topic" value="$(var gnss_input_topic)"/>
+      <arg name="health_topic" value="$(var gnss_health_topic)"/>
+      <arg name="param_file" value="$(var gnss_param_file)"/>
+      <arg name="pose_cov_scale_lon" value="$(var gnss_pose_cov_scale_lon)"/>
+      <arg name="pose_cov_scale_lat" value="$(var gnss_pose_cov_scale_lat)"/>
+      <arg name="twist_topic" value="/gyro_twist_with_covariance_gnss"/>
+    </include>
+
+    <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_camera.launch.xml">
+      <arg name="cam_sigma_xy_m" value="$(var cam_sigma_xy_m)"/>
+      <arg name="param_file" value="$(var camera_param_file)"/>
+      <arg name="cam_decimation" value="$(var cam_decimation)"/>
+      <arg name="health_topic" value="$(var camera_health_topic)"/>
+      <arg name="twist_topic" value="/gyro_twist_with_covariance_camera"/>
+    </include>
+  </group>
+
+  <!-- A/B 경로: 세 EKF 가 공유하는 인스턴스 1개 -->
+  <group if="$(var use_shared_gyro)">
+    <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer_single.launch.xml" />
+
+    <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_lidar.launch.xml">
+      <arg name="health_topic" value="$(var lidar_health_topic)"/>
+      <arg name="twist_topic" value="/gyro_twist_with_covariance_shared"/>
+    </include>
+
+    <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_gnss.launch.xml">
+      <arg name="gnss_input_topic" value="$(var gnss_input_topic)"/>
+      <arg name="health_topic" value="$(var gnss_health_topic)"/>
+      <arg name="param_file" value="$(var gnss_param_file)"/>
+      <arg name="pose_cov_scale_lon" value="$(var gnss_pose_cov_scale_lon)"/>
+      <arg name="pose_cov_scale_lat" value="$(var gnss_pose_cov_scale_lat)"/>
+      <arg name="twist_topic" value="/gyro_twist_with_covariance_shared"/>
+    </include>
+
+    <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer_camera.launch.xml">
+      <arg name="cam_sigma_xy_m" value="$(var cam_sigma_xy_m)"/>
+      <arg name="param_file" value="$(var camera_param_file)"/>
+      <arg name="cam_decimation" value="$(var cam_decimation)"/>
+      <arg name="health_topic" value="$(var camera_health_topic)"/>
+      <arg name="twist_topic" value="/gyro_twist_with_covariance_shared"/>
+    </include>
+  </group>
 </launch>

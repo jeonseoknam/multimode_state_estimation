@@ -1,4 +1,18 @@
 <launch>
+  <!-- 1.0 when /morai/ground_truth/odom carries m/s (morai_udp_bridge already
+       divides by 3.6). Legacy raw bags recorded before that fix store the ego
+       velocity in km/h: replay them with vel_scale:=0.277777778, otherwise
+       every ekf_localizer over-extrapolates between pose updates (the LiDAR
+       EKF, whose NDT input is the most delayed, drifts ~4 m). -->
+  <arg name="vel_scale" default="1.0"/>
+  <arg name="noise_vx_std" default="0.0"/>
+  <arg name="noise_wz_std" default="0.0"/>
+  <arg name="noise_seed" default="0"/>
+
   <node pkg="odom_to_twist_converter" exec="odom_to_twist_converter" name="odom_to_twist_converter" output="screen">
+    <param name="vel_scale" value="$(var vel_scale)"/>
+    <param name="noise_vx_std" value="$(var noise_vx_std)"/>
+    <param name="noise_wz_std" value="$(var noise_wz_std)"/>
+    <param name="noise_seed" value="$(var noise_seed)"/>
   </node>
 </launch>

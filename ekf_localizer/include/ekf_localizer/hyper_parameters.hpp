@@ -40,6 +40,13 @@ public:
     proc_stddev_vx_c(node->declare_parameter("proc_stddev_vx_c", 5.0)),
     proc_stddev_wz_c(node->declare_parameter("proc_stddev_wz_c", 1.0)),
     proc_stddev_yaw_c(node->declare_parameter("proc_stddev_yaw_c", 0.005)),
+    // Body-frame position random-walk process noise [m/sqrt(s)], longitudinal /
+    // lateral. Default 0.0 reproduces the original filter exactly (Q(X,X)=Q(Y,Y)=0).
+    // Unlike vx/wz/yaw (per-step stddev = c * dt), this is a true random walk:
+    // discrete variance = c^2 * dt, so the variance added over a fixed wall-clock
+    // gap between pose updates does not depend on the prediction rate.
+    proc_stddev_x_c(node->declare_parameter("proc_stddev_x_c", 0.0)),
+    proc_stddev_y_c(node->declare_parameter("proc_stddev_y_c", 0.0)),
     pose_no_update_count_threshold_warn(
       node->declare_parameter("pose_no_update_count_threshold_warn", 50)),
     pose_no_update_count_threshold_error(
@@ -69,6 +76,8 @@ public:
   const double proc_stddev_vx_c;   //!< @brief  vx process noise
   const double proc_stddev_wz_c;   //!< @brief  wz process noise
   const double proc_stddev_yaw_c;  //!< @brief  yaw process noise
+  const double proc_stddev_x_c;    //!< @brief  body-frame longitudinal position random walk [m/sqrt(s)]
+  const double proc_stddev_y_c;    //!< @brief  body-frame lateral position random walk [m/sqrt(s)]
   const size_t pose_no_update_count_threshold_warn;
   const size_t pose_no_update_count_threshold_error;
   const size_t twist_no_update_count_threshold_warn;

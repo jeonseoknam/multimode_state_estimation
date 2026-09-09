@@ -1,0 +1,45 @@
+<launch>
+  <!-- ============================================================
+       하위 EKF 3개가 공유하는 gyro_odometer 인스턴스 1개.
+
+       gyro_odometer_multi.launch.xml 은 LiDAR/GNSS/Camera EKF 마다
+       인스턴스를 하나씩(총 3개) 띄운다. 세 인스턴스는 같은 입력
+       토픽(/vehicle/twist_with_covariance, /morai/imu)과 같은 유효
+       파라미터를 쓰므로 출력이 서로 같다 — 실측 결과 주행 구간
+       398/398(100%), 전 구간 2954/2956(99.93%) 일치, 공분산 차이 0.
+       (docs/gyro_odometer/manuscript_text.md 4.1절)
+
+       이 launch 는 그 3개를 1개로 통합했을 때 하위 EKF 입력이 실제로
+       같아지는지, 그리고 최종 추정 결과가 반복 실행 간 산포 이내에서
+       같은지를 A/B 로 확인하기 위한 것이다. 기본 경로는 여전히 multi
+       이며(full_localization.launch.xml 의 use_shared_gyro 기본 false),
+       이 파일은 use_shared_gyro:=true 일 때만 사용된다.
+
+       중요: 파라미터는 gyro_odometer_multi.launch.xml 이 실제로 넘기는
+       값과 반드시 같아야 한다. gyro_odometer.launch.xml 의 기본값
+       (min_vx_std 0.77 / min_yaw_std 0.02) 을 그대로 쓰면 yaw rate
+       공분산이 0.25 -> 0.0004 로 625배 과신이 되어 전혀 다른 시스템이
+       된다. multi 의 세 인스턴스는 min_vy_std 만 다르게(0.1/0.3/0.1)
+       설정돼 있으나, gyro_odometer_core.cpp 가 covariance[Y_Y] 를
+       100000.0 으로 덮어써서 vy_cov 는 사용되지 않는다. 따라서 여기서는
+       LiDAR/Camera 와 같은 0.1 을 쓴다.
+       ============================================================ -->
+  <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer.launch.xml">
+    <arg name="input_vehicle_twist_with_covariance_topic" value="/vehicle/twist_with_covariance"/>
+    <arg name="input_imu_topic" value="/morai/imu"/>
+
+    <arg name="output_twist_raw_topic" value="/gyro_twist_raw_shared"/>
+    <arg name="output_twist_with_covariance_raw_topic" value="/gyro_twist_with_covariance_raw_shared"/>
+
+    <arg name="output_twist_topic" value="/gyro_twist_shared"/>
+    <arg name="output_twist_with_covariance_topic" value="/gyro_twist_with_covariance_shared"/>
+
+    <arg name="output_frame" value="base_link"/>
+    <arg name="message_timeout_sec" value="0.2"/>
+
+    <arg name="min_vx_std" value="1.5"/>
+    <arg name="min_vy_std" value="0.1"/>
+    <arg name="min_yaw_std" value="0.5"/>
+    <arg name="cov_inflate_factor" value="1.0"/>
+  </include>
+</launch>

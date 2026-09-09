@@ -93,3 +93,23 @@ Matrix6d processNoiseCovariance(
   Q(IDX::WZ, IDX::WZ) = proc_cov_wz_d;  // for wz
   return Q;
 }
+
+Matrix6d processNoiseCovariance(
+  const double proc_cov_yaw_d, const double proc_cov_vx_d, const double proc_cov_wz_d,
+  const double proc_cov_x_d, const double proc_cov_y_d, const double yaw)
+{
+  Matrix6d Q = processNoiseCovariance(proc_cov_yaw_d, proc_cov_vx_d, proc_cov_wz_d);
+  if (proc_cov_x_d <= 0.0 && proc_cov_y_d <= 0.0) {
+    return Q;
+  }
+  // Body-frame diag(qx, qy) rotated into the map frame: R(yaw) diag R(yaw)^T.
+  // Models the un-modelled position drift accumulated between sparse pose
+  // updates (twist integration error), which is anisotropic in the vehicle frame.
+  const double c = std::cos(yaw);
+  const double s = std::sin(yaw);
+  Q(IDX::X, IDX::X) = c * c * proc_cov_x_d + s * s * proc_cov_y_d;
+  Q(IDX::Y, IDX::Y) = s * s * proc_cov_x_d + c * c * proc_cov_y_d;
+  Q(IDX::X, IDX::Y) = c * s * (proc_cov_x_d - proc_cov_y_d);
+  Q(IDX::Y, IDX::X) = Q(IDX::X, IDX::Y);
+  return Q;
+}

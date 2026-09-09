@@ -135,8 +135,12 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_biased_pose_cov_;
   //!< @brief diagnostics publisher
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_diag_;
+  //!< @brief (optional) per-axis dependent fraction [lon,lat,yaw] publisher
+  rclcpp::Publisher<tier4_debug_msgs::msg::Float64MultiArrayStamped>::SharedPtr pub_split_axes_;
   //!< @brief initial pose subscriber
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_initialpose_;
+  //!< @brief dedicated recovery reset subscriber (per-instance, e.g. LiDAR fault recovery)
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_recovery_pose_;
   //!< @brief measurement pose with covariance subscriber
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_pose_with_cov_;
   //!< @brief measurement twist with covariance subscriber
@@ -173,6 +177,22 @@ private:
   double proc_cov_yaw_bias_d_;  //!< @brief  discrete yaw bias process noise
   double proc_cov_vx_d_;        //!< @brief  discrete process noise in d_vx=0
   double proc_cov_wz_d_;        //!< @brief  discrete process noise in d_wz=0
+  double proc_cov_x_d_;         //!< @brief  discrete body-frame longitudinal position process noise
+  double proc_cov_y_d_;         //!< @brief  discrete body-frame lateral position process noise
+
+  //!< @brief 출력 공분산 정직화 스케일 (모달별 offline GT 보정). per-axis
+  //!< (vehicle frame lon/lat) 라 크기+모양(종/횡 비율)까지 보정해 발행 —
+  //!< 별도 cov_inflator 노드 불필요. yaw 는 스칼라.
+  double pose_cov_scale_lon_;
+  double pose_cov_scale_lat_;
+  double pose_cov_scale_yaw_;
+
+  //!< (optional, gated) model-based P^D/P^I Joseph split. enable_split_cov_=false
+  //!< (default) ⇒ 아래 경로 전부 비활성 = 원본 동작 100% 보존.
+  bool enable_split_cov_;
+  bool split_initialized_;
+  Eigen::Matrix<double, 6, 6> PD_;   //!< dependent (shared-prediction) covariance
+  Eigen::Matrix<double, 6, 6> PI_;   //!< independent (own-measurement) covariance
 
   bool is_activated_;
 

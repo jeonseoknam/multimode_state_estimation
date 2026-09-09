@@ -1,7 +1,26 @@
 <launch>
+  <!-- 하위 EKF 가 구독할 속도(twist) 측정 토픽. 기본값은 모듈 전용
+       gyro_odometer 인스턴스의 출력이라 기존 동작과 동일하다.
+       full_localization.launch.xml 이 use_shared_gyro:=true 로 실행되면
+       세 EKF 모두 하나의 공유 인스턴스 출력을 가리키도록 덮어쓴다. -->
+  <arg name="twist_topic" default="/gyro_twist_with_covariance_camera"/>
+  <!-- Measurement-layer health gate topic. pose_to_pose_with_cov drops this
+       module's measurement while the flag on this topic is false. Pass an
+       empty string to disable the gate, which is what an honest "no gating"
+       ablation row needs: with the gate left on, a faulty measurement is
+       already suppressed one layer UPSTREAM of the fusion, so an ungated
+       fusion never actually sees the fault. -->
+  <arg name="health_topic" default="/multimode/camera_healthy"/>
   <arg name="param_file" default="$(find-pkg-share ekf_localizer)/config/ekf_localizer_camera.param.yaml"/>
   <arg name="ekf_mode" default="camera"/>
   <arg name="ekf_node_name" default="ekf_localizer_camera"/>
+  <arg name="cam_decimation" default="1"
+       description="Keep 1 of N camera pose messages. 6 breaks the colored-noise
+                    over-averaging, but it also leaves 0.2 s of dead reckoning
+                    between corrections, which is where the EKF output drifts
+                    away from its own measurement."/>
+  <arg name="cam_sigma_xy_m" default="0.05"
+       description="Camera measurement position noise (m). 0.05 for live ORB; 1.0 for headless localization-mode replay where ORB is ~1 m."/>
 
   <group>
     <push-ros-namespace namespace="localization/camera"/>
@@ -15,12 +34,20 @@
       <param name="output_topic" value="/orb_pose_aligned_with_covariance"/>
       <param name="expected_frame_id" value="map"/>
 
-      <!-- Per-sensor measurement covariance, differentiated by modality.
-           Camera is least reliable (ORB-SLAM3 relocalize instability) so
-           it keeps the largest sigma. Absolute scale is raw-measurement
-           noise, not EKF-output RMSE (first pass used 0.80 which
-           over-inflated R and caused EKF lag/drift). -->
-      <param name="sigma_xy_m" value="0.20"/>
+      <!-- ORB error is COLORED (decorr ~1-4s). At ~32Hz the EKF over-averages
+           correlated measurements → output cov collapses (overconfident). The fix
+           (LIVE full-pipeline verified 2026-06-25, raw_drive sweep): DECIMATE the
+           input to ~5Hz to break the correlation. LIVE result (pose_cov_scale=1):
+           decimation=6 + sigma_xy=0.05 → 2σ inside 89.1% (time-aligned), best
+           accuracy (lon RMSE 0.10). No output scaling. (sigma 0.10 → 86.2% but
+           worse accuracy 0.18.) decimation 6 ≈ 32→5.3Hz. Caveat: per-sample
+           ANEES ~4.8 (ORB jumps = heavy tail); the 2σ-inclusion metric is consistent. -->
+      <param name="decimation" value="$(var cam_decimation)"/>
+      <!-- 0.05 is honest for LIVE ORB (~0.17 m). Headless localization-mode
+           replay has ORB ~1 m (atlas floor + VO drift), where 0.05 is ~26x
+           overconfident (ANEES 721) and HG-SCIF over-trusts the camera. Pass
+           cam_sigma_xy_m:=1.0 for that regime. -->
+      <param name="sigma_xy_m" value="$(var cam_sigma_xy_m)"/>
       <param name="sigma_yaw_deg" value="2.0"/>
       <param name="use_zrp" value="false"/>
       <param name="sigma_z_m" value="0.05"/>
@@ -28,7 +55,7 @@
       <param name="big_unc" value="1000000.0"/>
 
       <!-- Suppress measurements while the camera is flagged unhealthy. -->
-      <param name="health_topic" value="/multimode/camera_healthy"/>
+      <param name="health_topic" value="$(var health_topic)"/>
 
     </node>
 
@@ -41,14 +68,41 @@
       <remap from="in_pose_with_covariance" to="/orb_pose_aligned_with_covariance"/>
 
       <!-- camera 전용 gyro_odometer 사용 -->
-      <remap from="in_twist_with_covariance" to="/gyro_twist_with_covariance_camera"/>
+      <remap from="in_twist_with_covariance" to="$(var twist_topic)"/>
 
       <remap from="initialpose" to="/initialpose"/>
       <remap from="trigger_node_srv" to="trigger_node"/>
 
       <param from="$(var param_file)"/>
+      <param name="proc_stddev_vx_c" value="2.0"/>
+      <param name="proc_stddev_x_c" value="0.26"/>
+      <param name="proc_stddev_y_c" value="0.26"/>
       <param name="ekf_mode" value="$(var ekf_mode)"/>
       <param name="pose_frame_id" value="map"/>
+      <!-- 카메라 출력 공분산 보정 = 종30/횡16 (eval_native_raw_10hz 검증, inside≈87%).
+           ORB 오차가 colored(decorr 6.1s)+고rate(28.5Hz)라 EKF가 ~174 상관샘플을
+           독립으로 과도평균 → P가 √N배 수축 → 심한 과신(scale=1 시 ANEES 20, inside 23%).
+           ⚠️대정정(06-25): 입력 decimation(→5Hz)으로 상관을 깨면 과도평균 사라져,
+           sigma_xy=0.10·scale=1로 2σ inside ~89% 달성(출력 스케일 불필요). 따라서
+           출력 스케일 30/16 제거. (ANEES는 ORB 점프 heavy-tail로 ~1.9 잔존 — 2σ는 일관.) -->
+      <!-- 2026-08-31 recalibration against ground truth on raw_drive with the
+           regenerated Sim(3) atlas. Per-axis variance scales computed as
+           mean(e^2)/mean(P) in the vehicle frame; the longitudinal axis is by far
+           the most overconfident, which matches the known GT-timestamp lag.
+           Before: camera normalised ANEES was measured at the run used for this fit. -->
+      <!-- 2026-09-02 recalibration, fault-free normal driving steady state
+           (75-130 s, 9 clean runs of 10). Two steps: the per-axis ratio sets
+           the anisotropy, then a single isotropic factor equal to the measured
+           2-D NEES sets the size. Fitting the two axis marginals alone does not
+           control the 2-D NEES when the covariance has an x-y correlation, which
+           is how the GNSS scale first overshot from 0.47 to 3.05. The evaluation
+           uses the published covariance as-is, so the single-module rows of the
+           paper table are measured numbers, not 1.00 by construction. -->
+      <param name="pose_cov_scale_lon" value="1.0"/>
+      <param name="pose_cov_scale_lat" value="1.0"/>
+      <param name="pose_cov_scale_yaw" value="1.0"/>
+      <!-- 모델 기반 P^D/P^I Joseph 분할 발행(원고 식5·6). combiner가 live 구독 -->
+      <param name="enable_split_cov" value="true"/>
     </node>
   </group>
 </launch>

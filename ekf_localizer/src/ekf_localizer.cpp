@@ -66,6 +66,21 @@ EKFLocalizer::EKFLocalizer(const std::string & node_name, const rclcpp::NodeOpti
   proc_cov_vx_d_ = std::pow(params_.proc_stddev_vx_c * ekf_dt_, 2.0);
   proc_cov_wz_d_ = std::pow(params_.proc_stddev_wz_c * ekf_dt_, 2.0);
   proc_cov_yaw_d_ = std::pow(params_.proc_stddev_yaw_c * ekf_dt_, 2.0);
+  // body-frame position random walk: variance grows linearly with time
+  proc_cov_x_d_ = std::pow(params_.proc_stddev_x_c, 2.0) * ekf_dt_;
+  proc_cov_y_d_ = std::pow(params_.proc_stddev_y_c, 2.0) * ekf_dt_;
+
+  // 출력 공분산 정직화 스케일 (모달별 offline GT 보정값; 기본 1.0=무보정).
+  // KF 갱신이 출력 P 를 collapse 시켜 입력 R 로는 정직 cov 불가 → 출력단 스케일.
+  // per-axis: vehicle frame 종(lon)/횡(lat) 별로 달라 크기+모양 모두 보정.
+  pose_cov_scale_lon_ = this->declare_parameter("pose_cov_scale_lon", 1.0);
+  pose_cov_scale_lat_ = this->declare_parameter("pose_cov_scale_lat", 1.0);
+  pose_cov_scale_yaw_ = this->declare_parameter("pose_cov_scale_yaw", 1.0);
+
+  // (optional) model-based P^D/P^I Joseph split. false(기본) ⇒ 원본 동작 보존.
+  // 분할 모델: 공유 예측(Q) → P^D, 모듈 고유 측정(K R Kᵀ) → P^I (낙관적 구조 분할).
+  enable_split_cov_ = this->declare_parameter("enable_split_cov", false);
+  split_initialized_ = false;
 
   is_activated_ = false;
 
@@ -90,8 +105,16 @@ EKFLocalizer::EKFLocalizer(const std::string & node_name, const rclcpp::NodeOpti
   pub_biased_pose_cov_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
     "ekf_biased_pose_with_covariance", 1);
   pub_diag_ = this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
+  if (enable_split_cov_) {
+    pub_split_axes_ =
+      create_publisher<tier4_debug_msgs::msg::Float64MultiArrayStamped>("scif_split_axes", 1);
+  }
   sub_initialpose_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
     "initialpose", 1, std::bind(&EKFLocalizer::callbackInitialPose, this, _1));
+  // 인스턴스 전용 회복 리셋 입력. 전역 initialpose 와 달리 이 인스턴스에만 remap 되므로
+  // (예: LiDAR 결함 회복 시) 다른 모달 EKF 를 건드리지 않고 이 EKF 만 하드 리셋한다.
+  sub_recovery_pose_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+    "recovery_initialpose", 1, std::bind(&EKFLocalizer::callbackInitialPose, this, _1));
   sub_pose_with_cov_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
     "in_pose_with_covariance", 1, std::bind(&EKFLocalizer::callbackPoseWithCovariance, this, _1));
   sub_twist_with_cov_ = create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
@@ -138,6 +161,8 @@ void EKFLocalizer::updatePredictFrequency()
       proc_cov_vx_d_ = std::pow(params_.proc_stddev_vx_c * ekf_dt_, 2.0);
       proc_cov_wz_d_ = std::pow(params_.proc_stddev_wz_c * ekf_dt_, 2.0);
       proc_cov_yaw_d_ = std::pow(params_.proc_stddev_yaw_c * ekf_dt_, 2.0);
+      proc_cov_x_d_ = std::pow(params_.proc_stddev_x_c, 2.0) * ekf_dt_;
+      proc_cov_y_d_ = std::pow(params_.proc_stddev_y_c, 2.0) * ekf_dt_;
     }
   }
   last_predict_time_ = std::make_shared<const rclcpp::Time>(get_clock()->now());
@@ -175,9 +200,17 @@ void EKFLocalizer::timerCallback()
 
   const Vector6d X_next = predictNextState(X_curr, dt);
   const Matrix6d A = createStateTransitionMatrix(X_curr, dt);
-  const Matrix6d Q = processNoiseCovariance(proc_cov_yaw_d_, proc_cov_vx_d_, proc_cov_wz_d_);
+  const Matrix6d Q = processNoiseCovariance(
+    proc_cov_yaw_d_, proc_cov_vx_d_, proc_cov_wz_d_, proc_cov_x_d_, proc_cov_y_d_,
+    X_curr(IDX::YAW));
 
   ekf_.predictWithDelay(X_next, A, Q);
+
+  // (optional) Joseph split predict: Q(공유 예측 잡음)는 전부 종속 성분에 누적.
+  if (enable_split_cov_ && split_initialized_) {
+    PD_ = A * PD_ * A.transpose() + Q;
+    PI_ = A * PI_ * A.transpose();
+  }
 
   // debug
   const Eigen::MatrixXd X_result = ekf_.getLatestX();
@@ -380,6 +413,13 @@ void EKFLocalizer::callbackInitialPose(
 
   ekf_.init(X, P, params_.extend_state_step);
 
+  // (optional) split 초기화: 공통 앵커(초기 공분산)는 종속, 독립부는 0.
+  if (enable_split_cov_) {
+    PD_ = P.topLeftCorner(6, 6);
+    PI_ = Eigen::Matrix<double, 6, 6>::Zero();
+    split_initialized_ = true;
+  }
+
   initSimple1DFilters(*initialpose);
 
   is_activated_ = true;
@@ -427,6 +467,12 @@ void EKFLocalizer::initEKF()
   P(IDX::WZ, IDX::WZ) = 50.0;    // for wz
 
   ekf_.init(X, P, params_.extend_state_step);
+
+  if (enable_split_cov_) {
+    PD_ = P.topLeftCorner(6, 6);
+    PI_ = Eigen::Matrix<double, 6, 6>::Zero();
+    split_initialized_ = true;
+  }
 }
 
 /*
@@ -508,6 +554,18 @@ bool EKFLocalizer::measurementUpdatePose(const geometry_msgs::msg::PoseWithCovar
     poseMeasurementCovariance(pose.pose.covariance, params_.pose_smoothing_steps);
 
   ekf_.updateWithDelay(y, C, R, delay_step);
+
+  // (optional) Joseph split update: 외수용 측정은 모듈별 독립 ⇒ 새 정보 K R Kᵀ는
+  // 독립 성분(P^I)에만 더하고, 두 성분 모두 (I-KC) 로 변환(Joseph 형식).
+  if (enable_split_cov_ && split_initialized_) {
+    const Eigen::Matrix<double, 6, 6> Psum = PD_ + PI_;
+    const Eigen::Matrix3d S = C * Psum * C.transpose() + R;
+    const Eigen::Matrix<double, 6, 3> Kp = Psum * C.transpose() * S.inverse();
+    const Eigen::Matrix<double, 6, 6> IKC =
+      Eigen::Matrix<double, 6, 6>::Identity() - Kp * C;
+    PD_ = IKC * PD_ * IKC.transpose();
+    PI_ = IKC * PI_ * IKC.transpose() + Kp * R * Kp.transpose();
+  }
 
   // Considering change of z value due to measurement pose delay
   const auto rpy = tier4_autoware_utils::getRPY(pose.pose.pose.orientation);
@@ -598,6 +656,19 @@ bool EKFLocalizer::measurementUpdateTwist(
 
   ekf_.updateWithDelay(y, C, R, delay_step);
 
+  // (optional) Joseph split update: twist(gyro_odometer)는 모든 모듈 EKF가 공유하는
+  // 공통 측정이므로, 새 정보 K R Kᵀ를 종속 성분(P^D)에 더한다(외수용 pose 와 반대).
+  // 두 성분 모두 (I-KC) 로 변환(Joseph 형식)하여 P = P^D + P^I 불변식을 유지.
+  if (enable_split_cov_ && split_initialized_) {
+    const Eigen::Matrix<double, 6, 6> Psum = PD_ + PI_;
+    const Eigen::Matrix2d S = C * Psum * C.transpose() + R;
+    const Eigen::Matrix<double, 6, 2> Kp = Psum * C.transpose() * S.inverse();
+    const Eigen::Matrix<double, 6, 6> IKC =
+      Eigen::Matrix<double, 6, 6>::Identity() - Kp * C;
+    PD_ = IKC * PD_ * IKC.transpose() + Kp * R * Kp.transpose();
+    PI_ = IKC * PI_ * IKC.transpose();
+  }
+
   // debug
   const Eigen::MatrixXd X_result = ekf_.getLatestX();
   DEBUG_PRINT_MAT(X_result.transpose());
@@ -615,6 +686,25 @@ void EKFLocalizer::publishEstimateResult()
   const Eigen::MatrixXd X = ekf_.getLatestX();
   const Eigen::MatrixXd P = ekf_.getLatestP();
 
+  // (optional) 모델 분할 발행: 차량좌표 종/횡/yaw 의 종속 비율 a = P^D/(P^D+P^I).
+  if (enable_split_cov_ && split_initialized_ && pub_split_axes_) {
+    const double yaw = X(IDX::YAW);
+    const double cs = std::cos(yaw), sn = std::sin(yaw);
+    Eigen::Matrix2d Rz;
+    Rz << cs, sn, -sn, cs;  // world -> vehicle
+    const Eigen::Matrix2d PDv = Rz * PD_.topLeftCorner(2, 2) * Rz.transpose();
+    const Eigen::Matrix2d PIv = Rz * PI_.topLeftCorner(2, 2) * Rz.transpose();
+    auto frac = [](double d, double i) {
+      const double den = d + i;
+      return den > 1e-12 ? std::min(std::max(d / den, 0.0), 1.0) : 0.0;
+    };
+    tier4_debug_msgs::msg::Float64MultiArrayStamped m;
+    m.stamp = current_time;
+    m.data = {frac(PDv(0, 0), PIv(0, 0)), frac(PDv(1, 1), PIv(1, 1)),
+              frac(PD_(IDX::YAW, IDX::YAW), PI_(IDX::YAW, IDX::YAW))};
+    pub_split_axes_->publish(m);
+  }
+
   /* publish latest pose */
   pub_pose_->publish(current_ekf_pose_);
   pub_biased_pose_->publish(current_biased_ekf_pose_);
@@ -625,6 +715,52 @@ void EKFLocalizer::publishEstimateResult()
   pose_cov.header.frame_id = current_ekf_pose_.header.frame_id;
   pose_cov.pose.pose = current_ekf_pose_.pose;
   pose_cov.pose.covariance = ekfCovarianceToPoseMessageCovariance(P);
+  // 출력 공분산 정직화 (cov_inflator 대체): vehicle frame 으로 회전 → 종/횡
+  // per-axis 스케일 → map frame 복귀. 크기+모양(종/횡 비율)까지 보정해 발행.
+  using POSE_COV = tier4_autoware_utils::xyzrpy_covariance_index::XYZRPY_COV_IDX;
+  {
+    const double yaw = X(IDX::YAW);
+    const double cs = std::cos(yaw), sn = std::sin(yaw);
+    const double Pxx = pose_cov.pose.covariance[POSE_COV::X_X];
+    const double Pxy = pose_cov.pose.covariance[POSE_COV::X_Y];
+    const double Pyy = pose_cov.pose.covariance[POSE_COV::Y_Y];
+    // world->vehicle: Pv = R P R^T,  R = [[cs, sn], [-sn, cs]]
+    double Pll = cs*cs*Pxx + 2*cs*sn*Pxy + sn*sn*Pyy;   // lon-lon
+    double Ptt = sn*sn*Pxx - 2*cs*sn*Pxy + cs*cs*Pyy;   // lat-lat
+    double Plt = -cs*sn*Pxx + (cs*cs - sn*sn)*Pxy + cs*sn*Pyy;
+    // The position-yaw cross terms have to be rotated and scaled with the
+    // same M, otherwise the published 3x3 is no longer a consistent
+    // covariance: scaling Pll by 45 while leaving Px_yaw untouched changes the
+    // implied position-yaw correlation by sqrt(45). Downstream the fusion is
+    // an information filter, so those cross terms feed the yaw disagreement
+    // straight back into the position estimate, and the fused pose walked
+    // metres away from every input it was built from.
+    const double Pxa = pose_cov.pose.covariance[POSE_COV::X_YAW];
+    const double Pya = pose_cov.pose.covariance[POSE_COV::Y_YAW];
+    double Pla =  cs*Pxa + sn*Pya;    // lon-yaw
+    double Pta = -sn*Pxa + cs*Pya;    // lat-yaw
+
+    // per-axis scale: M Pv M, M = diag(sqrt(lon), sqrt(lat), sqrt(yaw))
+    const double ml = std::sqrt(pose_cov_scale_lon_);
+    const double mt = std::sqrt(pose_cov_scale_lat_);
+    const double ma = std::sqrt(pose_cov_scale_yaw_);
+    Pll *= pose_cov_scale_lon_;
+    Ptt *= pose_cov_scale_lat_;
+    Plt *= ml * mt;
+    Pla *= ml * ma;
+    Pta *= mt * ma;
+
+    // vehicle->world: P = R^T Pv R
+    pose_cov.pose.covariance[POSE_COV::X_X] = cs*cs*Pll - 2*cs*sn*Plt + sn*sn*Ptt;
+    pose_cov.pose.covariance[POSE_COV::Y_Y] = sn*sn*Pll + 2*cs*sn*Plt + cs*cs*Ptt;
+    pose_cov.pose.covariance[POSE_COV::X_Y] = cs*sn*Pll + (cs*cs - sn*sn)*Plt - cs*sn*Ptt;
+    pose_cov.pose.covariance[POSE_COV::Y_X] = pose_cov.pose.covariance[POSE_COV::X_Y];
+    pose_cov.pose.covariance[POSE_COV::X_YAW] = cs*Pla - sn*Pta;
+    pose_cov.pose.covariance[POSE_COV::YAW_X] = pose_cov.pose.covariance[POSE_COV::X_YAW];
+    pose_cov.pose.covariance[POSE_COV::Y_YAW] = sn*Pla + cs*Pta;
+    pose_cov.pose.covariance[POSE_COV::YAW_Y] = pose_cov.pose.covariance[POSE_COV::Y_YAW];
+    pose_cov.pose.covariance[POSE_COV::YAW_YAW] *= pose_cov_scale_yaw_;
+  }
   pub_pose_cov_->publish(pose_cov);
 
   geometry_msgs::msg::PoseWithCovarianceStamped biased_pose_cov = pose_cov;

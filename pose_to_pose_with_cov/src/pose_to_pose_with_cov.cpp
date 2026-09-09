@@ -21,8 +21,19 @@ public:
 
     declare_parameter<std::string>("expected_frame_id", "map");
 
-    declare_parameter<double>("sigma_xy_m", 0.05);      // x,y stddev [m]
+    declare_parameter<double>("sigma_xy_m", 0.05);      // x,y stddev [m] (isotropic fallback)
     declare_parameter<double>("sigma_yaw_deg", 1.0);    // yaw stddev [deg]
+
+    // Anisotropic measurement noise in the VEHICLE frame. When both are
+    // > 0 they override sigma_xy_m: the measurement covariance becomes
+    // R_vehicle = diag(sigma_lon^2, sigma_lat^2), rotated into the map
+    // frame by the measurement yaw. This lets the along-track (longitudinal)
+    // uncertainty be set larger than the cross-track (lateral) one, matching
+    // the real error structure (e.g. NDT slip ≫ lateral) so the EKF output
+    // covariance is consistent without globally distrusting the measurement.
+    // Default -1 keeps the original isotropic sigma_xy_m behaviour.
+    declare_parameter<double>("sigma_lon_m", -1.0);     // longitudinal (along-track) stddev [m]
+    declare_parameter<double>("sigma_lat_m", -1.0);     // lateral (cross-track) stddev [m]
 
     declare_parameter<bool>("use_zrp", false);          // z/roll/pitch 관측 포함 여부
     declare_parameter<double>("sigma_z_m", 0.05);       // z stddev [m]
@@ -37,6 +48,14 @@ public:
     // measurement and then takes a long time to catch up after recovery.
     // Empty string disables the gate (preserves original behaviour).
     declare_parameter<std::string>("health_topic", "");
+
+    // Optional input decimation (throttle): publish only every Nth pose.
+    // For temporally-correlated sources (e.g. ORB-SLAM3 ~32Hz, decorr ~1-4s),
+    // the downstream EKF over-averages correlated measurements and its output
+    // covariance collapses (overconfident). Decimating to ~5Hz (decimation~6)
+    // breaks the correlation so the EKF stays consistent WITHOUT output scaling
+    // (verified offline 2026-06-25: 5Hz + sigma 0.10 → 2σ inside ~89%). 1 = off.
+    declare_parameter<int>("decimation", 1);
 
     const std::string input_topic = get_parameter("input_topic").as_string();
     const std::string output_topic = get_parameter("output_topic").as_string();
@@ -97,10 +116,18 @@ private:
       return;
     }
 
+    // Input decimation (throttle): drop all but every Nth healthy pose.
+    const int decimation = static_cast<int>(std::max<int64_t>(1, get_parameter("decimation").as_int()));
+    if ((decim_count_++ % static_cast<unsigned long>(decimation)) != 0) {
+      return;
+    }
+
     const std::string expected_frame = get_parameter("expected_frame_id").as_string();
 
     const double sigma_xy_m    = get_parameter("sigma_xy_m").as_double();
     const double sigma_yaw_deg = get_parameter("sigma_yaw_deg").as_double();
+    const double sigma_lon_m   = get_parameter("sigma_lon_m").as_double();
+    const double sigma_lat_m   = get_parameter("sigma_lat_m").as_double();
 
     const bool use_zrp         = get_parameter("use_zrp").as_bool();
     const double sigma_z_m     = get_parameter("sigma_z_m").as_double();
@@ -119,12 +146,35 @@ private:
     }
 
     // index:
-    // 0:x, 7:y, 14:z, 21:roll, 28:pitch, 35:yaw
-    const double var_xy  = sigma_xy_m * sigma_xy_m;
+    // 0:x, 1:xy, 6:yx, 7:y, 14:z, 21:roll, 28:pitch, 35:yaw
     const double var_yaw = std::pow(sigma_yaw_deg * M_PI / 180.0, 2.0);
 
-    out.pose.covariance[0]  = var_xy;   // x
-    out.pose.covariance[7]  = var_xy;   // y
+    if (sigma_lon_m > 0.0 && sigma_lat_m > 0.0) {
+      // Anisotropic R in the vehicle frame, rotated into the map frame by
+      // the measurement yaw:
+      //   R_map = Rz(yaw) * diag(var_lon, var_lat) * Rz(yaw)^T
+      const auto & q = msg->pose.orientation;
+      const double siny = 2.0 * (q.w * q.z + q.x * q.y);
+      const double cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+      const double yaw  = std::atan2(siny, cosy);
+      const double c = std::cos(yaw);
+      const double s = std::sin(yaw);
+      const double var_lon = sigma_lon_m * sigma_lon_m;
+      const double var_lat = sigma_lat_m * sigma_lat_m;
+      const double xx = c * c * var_lon + s * s * var_lat;
+      const double yy = s * s * var_lon + c * c * var_lat;
+      const double xy = c * s * (var_lon - var_lat);
+
+      out.pose.covariance[0] = xx;   // x
+      out.pose.covariance[1] = xy;   // xy
+      out.pose.covariance[6] = xy;   // yx
+      out.pose.covariance[7] = yy;   // y
+    } else {
+      // Isotropic fallback (original behaviour).
+      const double var_xy = sigma_xy_m * sigma_xy_m;
+      out.pose.covariance[0] = var_xy;   // x
+      out.pose.covariance[7] = var_xy;   // y
+    }
     out.pose.covariance[35] = var_yaw;  // yaw
 
     if (use_zrp) {
@@ -152,6 +202,7 @@ private:
   // gate is disabled (no health_topic) or the health publisher hasn't sent
   // its first message yet, the node still forwards data.
   std::atomic<bool> healthy_{true};
+  unsigned long decim_count_{0};   // input decimation (throttle) counter
 };
 
 int main(int argc, char ** argv)
